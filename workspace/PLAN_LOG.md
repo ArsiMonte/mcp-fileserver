@@ -17,3 +17,8 @@
 - [ ] Session 2 agent records design decisions in `DECISIONS.md`.
 
 - [x] Automated test suite executed and validated.
+
+- [x] Automated test suite executed and validated.
+
+- [x] Session 1: Implemented add() and multiply() in math_utils.ts
+- [ ] Session 2: Create unit tests and verify checkpoints
