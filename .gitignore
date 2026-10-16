@@ -1,0 +1,18 @@
+# Node dependencies
+node_modules/
+dist/
+
+# Environment variables
+.env
+
+# Logs & Process Manager
+logs/
+*.log
+.pm2/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
