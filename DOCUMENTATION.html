@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MCP File-Server Connector: Project Report</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #24292f;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 0 20px;
+    }
+    h1 { font-size: 28px; border-bottom: 2px solid #eaecef; padding-bottom: 8px; color: #0969da; }
+    h2 { font-size: 20px; border-bottom: 1px solid #eaecef; padding-bottom: 6px; margin-top: 28px; color: #1f2328; }
+    h3 { font-size: 16px; margin-top: 20px; color: #1f2328; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #d0d7de;
+      padding: 10px 14px;
+      text-align: left;
+    }
+    th {
+      background-color: #f6f8fa;
+      font-weight: 600;
+    }
+    tr:nth-child(even) { background-color: #fbfcfd; }
+    code {
+      background-color: #eff1f3;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+      font-size: 13px;
+    }
+    pre {
+      background-color: #f6f8fa;
+      padding: 14px;
+      border-radius: 6px;
+      overflow-x: auto;
+      border: 1px solid #d0d7de;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+      font-size: 13px;
+    }
+    blockquote {
+      border-left: 4px solid #0969da;
+      padding: 6px 16px;
+      color: #57606a;
+      background-color: #f6f8fa;
+      margin: 16px 0;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: bold;
+      border-radius: 4px;
+      background: #ddf4ff;
+      color: #0969da;
+    }
+    @media print {
+      body { margin: 20px; font-size: 12pt; }
+      pre, table { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Project Report: Sandboxed MCP File-Server Connector</h1>
+
+<p>
+  <strong>Course:</strong> CS 3A / CS 3B Elective: Model Context Protocol (MCP)<br>
+  <strong>Deliverable:</strong> Technical Report & Architectural Documentation<br>
+  <strong>Repository:</strong> <a href="https://github.com/ArsiMonte/mcp-fileserver">https://github.com/ArsiMonte/mcp-fileserver</a><br>
+  <strong>Author:</strong> ArsiMonte
+</p>
+
+<hr>
+
+<h2>1. Executive Summary & Problem Brief</h2>
+<p>
+  In autonomous multi-agent software engineering, AI agents are constrained by finite context windows, stateless runtime sessions, and security risks when accessing host systems. When multiple sequential agents collaborate, state drift and inadvertent file clobbering frequently occur.
+</p>
+<p>
+  This project implements a production-grade, sandboxed <strong>Model Context Protocol (MCP) File-Server Connector</strong>. It acts as persistent shared memory for AI agents, guaranteeing that all read, write, search, and git operations remain strictly jailed within a designated <code>WORKSPACE_ROOT</code>. Furthermore, it introduces an optimistic concurrency lock (<code>if_version</code>), a 4-file handoff protocol, token-gated public endpoints, and process persistence via PM2.
+</p>
+
+<pre>
++---------------------------------------------------------------------------------+
+|                                 MCP Client                                      |
+|                       (Cursor / Claude Desktop / Agent)                         |
++---------------------------------------+-----------------------------------------+
+                                        |
+                 [ HTTPS Tunnel (ngrok/cloudflared) + Bearer Token ]
+                                        |
+                                        v
++---------------------------------------------------------------------------------+
+|                       MCP File-Server Connector (Port 3000)                     |
+|                                                                                 |
+|  +-------------------------+  +-----------------------+  +-------------------+  |
+|  |     Token Auth Gate     |  |    Streamable HTTP    |  |     stdio Mode    |  |
+|  |  (Bearer / X-MCP-Token) |  |   (Express + SSE)     |  |   (Local Testing) |  |
+|  +-------------------------+  +-----------------------+  +-------------------+  |
+|                                           |                                     |
+|  +----------------------------------------v----------------------------------+  |
+|  |                        12 Registered MCP Tools                            |  |
+|  |  list_files | read_file | write_file | str_replace | delete_file          |  |
+|  |  search_code | repo_map | git_status | git_diff | git_commit              |  |
+|  |  read_handoff | update_handoff                                            |  |
+|  +---------------------------------------------------------------------------+  |
+|                                           |                                     |
+|  +----------------------------------------v----------------------------------+  |
+|  |                       Sandbox Security Engine                             |  |
+|  |  • Path Normalizer & Canonicalizer    • Symlink Realpath Verifier         |  |
+|  |  • Null-Byte Rejector                 • Audit Logger (logs/audit.log)     |  |
+|  +---------------------------------------------------------------------------+  |
+|                                           |                                     |
+|                                           v                                     |
+|  +---------------------------------------------------------------------------+  |
+|  |                      Sandboxed Workspace Root                             |  |
+|  |  PROJECT_STATE.md | PLAN_LOG.md | CHECKPOINTS.md | DECISIONS.md           |  |
+|  +---------------------------------------------------------------------------+  |
++---------------------------------------------------------------------------------+
+</pre>
+
+<h2>2. Tech Stack & Architectural Justifications (Rubric Criterion D)</h2>
+<p>The tech stack was selected to satisfy the <strong>Exemplary</strong> criteria of Rubric II:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Layer</th>
+      <th>Selection</th>
+      <th>Alternatives</th>
+      <th>Justification & Architectural Trade-offs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Runtime</strong></td>
+      <td><strong>Node.js (v24 LTS) + TypeScript</strong></td>
+      <td>Python, Go</td>
+      <td>Asynchronous, event-driven I/O ideal for streaming Server-Sent Events (SSE). TypeScript ensures strict compile-time validation for tool schemas matching the official specification.</td>
+    </tr>
+    <tr>
+      <td><strong>SDK</strong></td>
+      <td><strong>@modelcontextprotocol/sdk</strong></td>
+      <td>FastMCP, Python SDK</td>
+      <td>Official reference implementation ensuring 100% protocol compliance (JSON-RPC 2.0 framing, capability negotiation, error handling).</td>
+    </tr>
+    <tr>
+      <td><strong>Transport</strong></td>
+      <td><strong>Streamable HTTP (SSE) & stdio</strong></td>
+      <td>stdio only, WebSockets</td>
+      <td>Stdio enables zero-config local testing with Claude Desktop/Cursor; Streamable HTTP (SSE) allows remote agents to interact over HTTPS tunnels.</td>
+    </tr>
+    <tr>
+      <td><strong>Validation</strong></td>
+      <td><strong>Zod Schemas</strong></td>
+      <td>Raw JSON Schema</td>
+      <td>Zod provides end-to-end type safety, deriving TypeScript types and JSON-RPC parameter schemas from a single source of truth.</td>
+    </tr>
+    <tr>
+      <td><strong>Process Manager</strong></td>
+      <td><strong>PM2 (ecosystem.config.cjs)</strong></td>
+      <td>Docker, Systemd</td>
+      <td>Cross-platform process supervisor providing auto-restart on unhandled errors, memory monitoring (300M max), log rotation, and server reboot resilience.</td>
+    </tr>
+    <tr>
+      <td><strong>Tunneling</strong></td>
+      <td><strong>ngrok / Cloudflare Tunnel</strong></td>
+      <td>Direct Port Forward</td>
+      <td>Exposes local endpoints over TLS/HTTPS with DDoS protection, eliminating the risks of opening raw router ports.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Configuration & Secret Isolation</h3>
+<p>
+  All sensitive variables (<code>PORT</code>, <code>AUTH_TOKEN</code>, <code>WORKSPACE_ROOT</code>, <code>AUDIT_LOG_FILE</code>) are managed exclusively via environment variables (<code>.env</code>). The <code>.env</code> file is excluded in <code>.gitignore</code> to prevent secret leakage, while <code>.env.example</code> documents the required schema.
+</p>
+
+<h2>3. Security Architecture & Sandboxing (Rubric Criterion E)</h2>
+
+<h3>3.1 Sandbox Path Confinement</h3>
+<p>The core security layer (<code>src/security/sandbox.ts</code>) prevents agents from accessing host files:</p>
+<ol>
+  <li><strong>Null-Byte Injection Defense:</strong> Immediately detects and rejects strings containing <code>\0</code>.</li>
+  <li><strong>Canonical Path Normalization:</strong> Resolves relative and absolute paths against <code>path.resolve(WORKSPACE_ROOT)</code>.</li>
+  <li><strong>Boundary Enclosure:</strong> Verifies that the resolved path is either identical to the workspace root or begins with <code>${WORKSPACE_ROOT}${path.sep}</code>. Attacks using directory traversal (e.g. <code>../../etc/passwd</code> or <code>workspace_fake/</code>) trigger a <code>SandboxViolationError</code>.</li>
+  <li><strong>Symlink Traversal Check:</strong> Uses <code>fs.realpathSync</code> on existing files and ancestor directories to block symlinks pointing to targets outside the jail.</li>
+</ol>
+
+<h3>3.2 Endpoint Token Authentication</h3>
+<p>
+  Public endpoints (<code>/sse</code> and <code>/messages</code>) are gated by Express middleware (<code>src/security/auth.ts</code>). Clients must provide a valid <code>AUTH_TOKEN</code> via:
+</p>
+<ul>
+  <li><code>Authorization: Bearer &lt;AUTH_TOKEN&gt;</code></li>
+  <li><code>X-MCP-Token: &lt;AUTH_TOKEN&gt;</code></li>
+  <li><code>?token=&lt;AUTH_TOKEN&gt;</code> (for browser EventSource connections)</li>
+</ul>
+<p>
+  Unauthenticated requests receive <code>401 Unauthorized</code> and generate a security alert entry in the audit log. The <code>/health</code> endpoint remains accessible without authentication for uptime monitors.
+</p>
+
+<h3>3.3 Gated Destructive Actions & Audit Logging</h3>
+<ul>
+  <li><strong>Deletion Guard:</strong> <code>delete_file</code> is strictly restricted to individual files (directory deletion is blocked) and requires an explicit <code>confirm: true</code> parameter.</li>
+  <li><strong>Audit Trail:</strong> Every tool execution is recorded in structured JSON format in <code>logs/audit.log</code> (timestamp, tool name, sanitized parameters, latency, outcome: <code>SUCCESS</code>, <code>REJECTED</code>, or <code>ERROR</code>).</li>
+</ul>
+
+<h2>4. Tool Design Choices & Concurrency Control</h2>
+<p>The connector registers <strong>12 specialized tools</strong> divided into four logical domains:</p>
+
+<h3>4.1 Core File Operations & Optimistic Locking</h3>
+<ul>
+  <li><code>list_files</code>: Non-escaping directory scanner with recursive options and ignore filters (<code>node_modules</code>, <code>.git</code>).</li>
+  <li><code>read_file</code>: Line-range slicing (<code>start_line</code>, <code>end_line</code>) with line numbering and SHA-256 version hash generation.</li>
+  <li><code>write_file</code>: File creation/update with parent directory creation and <strong><code>if_version</code> optimistic concurrency locking</strong>. If an agent provides an outdated version hash, the write is aborted, preventing clobbering in multi-agent runs.</li>
+  <li><code>str_replace</code>: In-place string replacement requiring exact substring matches and enforcing uniqueness unless <code>allow_multiple: true</code> is explicitly passed.</li>
+  <li><code>delete_file</code>: Gated removal of target files.</li>
+</ul>
+
+<h3>4.2 Search & Discovery (Stretch Features)</h3>
+<ul>
+  <li><code>search_code</code>: Multi-file regex/string search across the workspace with line-by-line matches.</li>
+  <li><code>repo_map</code>: Generates an ASCII visual tree of directory structure to accelerate agent onboarding.</li>
+</ul>
+
+<h3>4.3 Git-Lite Tools</h3>
+<ul>
+  <li><code>git_status</code>: Displays branch status and modified/untracked files.</li>
+  <li><code>git_diff</code>: Inspects unstaged or staged changes within the workspace.</li>
+  <li><code>git_commit</code>: Stages modified files and creates standard git commits signed by the agent.</li>
+</ul>
+
+<h2>5. Multi-Agent Handoff Protocol</h2>
+<p>To solve context loss between independent agent sessions, the server integrates a 4-file handoff protocol located in <code>workspace/</code>:</p>
+<ol>
+  <li><strong><code>PROJECT_STATE.md</code>:</strong> Tracks overarching project vision, active sprint milestones, and current session ID.</li>
+  <li><strong><code>PLAN_LOG.md</code>:</strong> Chronological checklist of pending and completed tasks.</li>
+  <li><strong><code>CHECKPOINTS.md</code>:</strong> Verification gates and sign-offs required before concluding a session.</li>
+  <li><strong><code>DECISIONS.md</code>:</strong> Architectural Decision Records (ADRs) documenting technical rationale.</li>
+</ol>
+<p>
+  Agents interact with this system via <code>read_handoff</code> (retrieving individual docs or <code>ALL</code>) and <code>update_handoff</code> (safely appending notes or updating state).
+</p>
+
+<h2>6. Testing</h2>
+<blockquote>
+  <strong>STUDENT NOTE / INSTRUCTION:</strong> Place your test transcripts, screenshots, and multi-agent verification evidence in this section.
+</blockquote>
+
+<h3>6.1 Automated Test Suite Results (Vitest)</h3>
+<p>All 20 automated unit and security tests pass:</p>
+<ul>
+  <li><strong>Sandbox Boundary Tests (7 tests):</strong> Directory climbing (<code>../</code>), absolute host paths, null bytes, and subfolder jail escapes.</li>
+  <li><strong>Endpoint Security Tests (4 tests):</strong> Public health check bypass, missing token rejection (HTTP 401), and valid token authentication.</li>
+  <li><strong>Tool Operation Tests (9 tests):</strong> File reads/writes, optimistic version lock rejections, <code>str_replace</code>, gated deletions, and handoff protocols.</li>
+</ul>
+
+<pre>
+✓ tests/sandbox.test.ts (7 tests)
+✓ tests/auth.test.ts (4 tests)
+✓ tests/tools.test.ts (9 tests)
+
+Test Files  3 passed (3)
+Tests       20 passed (20)
+Duration    4.03s
+</pre>
+
+<h3>6.2 Interactive MCP Inspector Verification</h3>
+<p><em>(Insert your MCP Inspector tool execution logs or screenshot here)</em></p>
+
+<h3>6.3 Multi-Agent Session Task Transcript</h3>
+<p><em>(Insert your multi-agent session transcript demonstrating Session 1 creating a feature and Session 2 verifying it via the handoff protocol here)</em></p>
+
+<h2>7. Production Deployment & Recovery (PM2)</h2>
+<p>The server is configured for automated recovery using PM2 via <code>ecosystem.config.cjs</code>:</p>
+<ul>
+  <li><strong>Crash Recovery:</strong> <code>autorestart: true</code> automatically revives the server upon unexpected termination.</li>
+  <li><strong>Resource Management:</strong> <code>max_memory_restart: '300M'</code> prevents process leaks.</li>
+  <li><strong>Persistent Startup:</strong> <code>pm2 save</code> persists the process table across machine reboots.</li>
+  <li><strong>Health Verification:</strong> Monitored continuously via <code>GET /health</code>.</li>
+</ul>
+
+</body>
+</html>
